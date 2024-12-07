@@ -44,7 +44,10 @@ def load_data(device):
 def load_model():
     """Load or initialize the model."""
     # TODO: Replace MockModel with your trained model
-    model = MockModel()
+    from JEPA import JEPAModel
+    model = JEPAModel(repr_dim=256, device="cuda").to("cuda")
+    model.load_state_dict(torch.load("model_weights.pth"))
+    model.eval()
     return model
 
 
