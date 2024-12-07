@@ -46,8 +46,6 @@ def load_model():
     # TODO: Replace MockModel with your trained model
     from JEPA import JEPAModel
     model = JEPAModel(repr_dim=256, device="cuda").to("cuda")
-    model.load_state_dict(torch.load("model_weights.pth"))
-    model.eval()
     return model
 
 
