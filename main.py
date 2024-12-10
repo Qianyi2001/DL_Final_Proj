@@ -1,9 +1,8 @@
 from dataset import create_wall_dataloader
 from evaluator import ProbingEvaluator
 import torch
-from models import MockModel
 import glob
-
+from JEPA import Encoder, Predictor, JEPAFullModel
 
 def get_device():
     """Check for GPU availability."""
@@ -43,10 +42,21 @@ def load_data(device):
 
 def load_model():
     """Load or initialize the model."""
-    # TODO: Replace MockModel with your trained model
-    model = MockModel()
-    return model
+    # 创建空的模型组件
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    feature_dim = 128
+    encoder_theta = Encoder(feature_dim=feature_dim).to(device)
+    predictor = Predictor(feature_dim=feature_dim, action_dim=2).to(device)
 
+    # 从文件加载参数
+    # 确保 'model_weights.pth' 是您训练好后保存在同目录的权重文件
+    checkpoint = torch.load('model_weights.pth', map_location=device)
+    encoder_theta.load_state_dict(checkpoint['encoder_theta'])
+    predictor.load_state_dict(checkpoint['predictor'])
+
+    # 创建JEPAFullModel实例
+    model = JEPAFullModel(encoder_theta, predictor).to(device)
+    return model
 
 def evaluate_model(device, model, probe_train_ds, probe_val_ds):
     evaluator = ProbingEvaluator(
