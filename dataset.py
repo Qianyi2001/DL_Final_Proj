@@ -54,14 +54,6 @@ def create_wall_dataloader(
         device=device,
     )
 
-    # 如果是训练模式且需要限制数据为 40%
-    if train:
-        total_indices = list(range(len(ds)))
-        subset_indices, _ = train_test_split(
-            total_indices, test_size=0.6, random_state=42
-        )
-        ds = Subset(ds, subset_indices)
-
     loader = torch.utils.data.DataLoader(
         ds,
         batch_size,
