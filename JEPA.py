@@ -13,7 +13,7 @@ class Encoder(nn.Module):
             nn.Conv2d(64,128, 3, stride=2, padding=1), # 16->8
             nn.ReLU(),
         )
-        self.fc = nn.Linear(128*8*8, feature_dim)
+        self.fc = nn.Linear(128*9*9, feature_dim)
 
     def forward(self, x):
         # x: (B, 2, 64, 64)
