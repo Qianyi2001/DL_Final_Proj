@@ -5,52 +5,60 @@ from JEPA import Encoder, Predictor, vicreg_loss
 from dataset import create_wall_dataloader
 from tqdm import tqdm  # 引入 tqdm
 
-def train_jepa(encoder_theta, encoder_psi, predictor, dataloader,
-               optimizer, device='cuda', epochs=1):
+
+def train_jepa(encoder_theta, encoder_psi, predictor, dataloader, optimizer, device='cuda', epochs=1):
     encoder_theta.train()
     encoder_psi.train()
     predictor.train()
 
     for epoch in range(epochs):
-        # 用 tqdm 包装 dataloader 显示进度条
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch + 1}/{epochs}")
-
-        for batch_idx, batch in enumerate(progress_bar):
-            states = batch.states  # (N, T, 2, 64, 64)
-            actions = batch.actions  # (N, T-1, 2)
+        for i, batch in enumerate(dataloader):
+            states = batch.states  # (N, T, 2, H, W)
+            actions = batch.actions # (N, T-1, 2)
             states = states.to(device)
             actions = actions.to(device)
 
             N, T, C, H, W = states.shape
-            s0 = encoder_theta(states[:, 0])
+
+            s0 = encoder_theta(states[:,0])
 
             with torch.no_grad():
                 target_reps = []
                 for t in range(T):
-                    target_reps.append(encoder_psi(states[:, t]))
-                target_reps = torch.stack(target_reps, dim=1)  # (N, T, feature_dim)
+                    target_reps.append(encoder_psi(states[:,t]))
+                target_reps = torch.stack(target_reps, dim=1) # (N, T, feature_dim)
 
             pred_s = [s0]
             for t in range(1, T):
-                u_t_1 = actions[:, t - 1]
+                u_t_1 = actions[:, t-1]
                 prev_s = pred_s[-1]
                 next_s_pred = predictor(prev_s, u_t_1)
                 pred_s.append(next_s_pred)
-            pred_s = torch.stack(pred_s, dim=1)  # (N, T, feature_dim)
+            pred_s = torch.stack(pred_s, dim=1) # (N, T, feature_dim)
 
+            # Compute VICReg loss
             loss = vicreg_loss(
-                pred_s[:, 1:].reshape(-1, pred_s.size(-1)),
-                target_reps[:, 1:].reshape(-1, target_reps.size(-1))
+                pred_s[:,1:].reshape(-1, pred_s.size(-1)),
+                target_reps[:,1:].reshape(-1, target_reps.size(-1))
             )
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # 更新 tqdm 描述
-            progress_bar.set_postfix({'loss': loss.item()})
+            if i % 100 == 0:
+                print(f"Epoch {epoch}, step {i}, loss: {loss.item()}")
 
-        print(f"Epoch {epoch + 1} complete. Loss: {loss.item()}")
+                # 检查pred_s和target_reps的均值方差
+                pred_mean = pred_s.mean().item()
+                pred_std = pred_s.std().item()
+                target_mean = target_reps.mean().item()
+                target_std = target_reps.std().item()
+                print(f"pred_s mean: {pred_mean:.4f}, std: {pred_std:.4f}")
+                print(f"target_reps mean: {target_mean:.4f}, std: {target_std:.4f}")
+
+        print(f"Epoch {epoch} complete. Loss: {loss.item()}")
+
 
 
 if __name__ == "__main__":
@@ -66,7 +74,7 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(list(encoder_theta.parameters()) +
                                  list(predictor.parameters()),
-                                 lr=1e-3)
+                                 lr=1e-4)
 
     # 示例：用户应在外部通过 create_wall_dataloader 创建 dataloader
     dataloader = create_wall_dataloader(
@@ -82,4 +90,4 @@ if __name__ == "__main__":
         'encoder_theta': encoder_theta.state_dict(),
         'encoder_psi': encoder_psi.state_dict(),
         'predictor': predictor.state_dict()
-    }, 'home/qx690/model_weights.pth')
+    }, '/home/qx690/model_weights.pth')
