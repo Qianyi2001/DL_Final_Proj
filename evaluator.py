@@ -1,7 +1,6 @@
 from typing import NamedTuple, List, Any, Optional, Dict
 from itertools import chain
 from dataclasses import dataclass
-import itertools
 import os
 import torch
 import torch.nn.functional as F
@@ -12,7 +11,6 @@ from matplotlib import pyplot as plt
 from schedulers import Scheduler, LRSchedule
 from models import Prober, build_mlp
 from configs import ConfigBase
-
 from dataset import WallDataset
 from normalizer import Normalizer
 
@@ -55,20 +53,16 @@ class ProbingEvaluator:
     ):
         self.device = device
         self.config = config
-
         self.model = model
         self.model.eval()
-
         self.quick_debug = quick_debug
-
         self.ds = probe_train_ds
         self.val_ds = probe_val_ds
-
         self.normalizer = Normalizer()
 
     def train_pred_prober(self):
         """
-        Probes whether the predicted embeddings capture the future locations
+        Probes whether the predicted embeddings capture the future locations.
         """
         repr_dim = self.model.repr_dim
         dataset = self.ds
@@ -88,15 +82,8 @@ class ProbingEvaluator:
             output_shape=prober_output_shape,
         ).to(self.device)
 
-        all_parameters = []
-        all_parameters += list(prober.parameters())
-
+        all_parameters = list(prober.parameters())
         optimizer_pred_prober = torch.optim.Adam(all_parameters, config.lr)
-
-        step = 0
-
-        batch_size = dataset.batch_size
-        batch_steps = None
 
         scheduler = Scheduler(
             schedule=self.config.schedule,
@@ -104,75 +91,49 @@ class ProbingEvaluator:
             data_loader=dataset,
             epochs=epochs,
             optimizer=optimizer_pred_prober,
-            batch_steps=batch_steps,
-            batch_size=batch_size,
+            batch_steps=None,
+            batch_size=dataset.batch_size,
         )
+
+        step = 0
 
         for epoch in tqdm(range(epochs), desc=f"Probe prediction epochs"):
             for batch in tqdm(dataset, desc="Probe prediction step"):
                 ################################################################################
-                # TODO: Forward pass through your model
-                # Step 1: Initial embedding from the first observation
-                init_states = batch.states[:, 0:1]  # BS, 1, C, H, W
-                pred_encs = model(states=init_states, actions=batch.actions)
-                pred_encs = pred_encs.transpose(0, 1)  # BS, T, D --> T, BS, D
+                # Step 1: Use the JEPA model to predict embeddings for the entire sequence
+                pred_encs = model(states=batch.states, actions=batch.actions)  # (B, T, D)
+                pred_encs = pred_encs.transpose(0, 1)  # Transpose to (T, B, D) if needed
 
-                # Step 2: Recurrent unrolling of representations
-                for t in range(1, batch.states.size(1)):
-                    pred_enc_t = model(
-                        states=batch.states[:, t:t+1],  # Only the current timestep
-                        actions=batch.actions[:, t:t+1],
-                        hidden_state=pred_encs[t-1],  # Feed the previous embedding
-                    )
-                    pred_encs = torch.cat([pred_encs, pred_enc_t], dim=0)
-
-                # Step 3: Ensure pred_encs has shape (T, BS, D)
-                assert pred_encs.shape[0] == batch.states.size(1), "Prediction shape mismatch"
-
-                pred_encs = pred_encs.detach()
-
-                n_steps = pred_encs.shape[0]
-                bs = pred_encs.shape[1]
-
-                losses_list = []
-
+                # Step 2: Prepare target locations and normalize
                 target = getattr(batch, "locations").cuda()
                 target = self.normalizer.normalize_location(target)
 
+                # Step 3: Subsample timesteps if needed
                 if (
                     config.sample_timesteps is not None
-                    and config.sample_timesteps < n_steps
+                    and config.sample_timesteps < pred_encs.shape[0]
                 ):
-                    sample_shape = (config.sample_timesteps,) + pred_encs.shape[1:]
-                    sampled_pred_encs = torch.empty(
-                        sample_shape,
-                        dtype=pred_encs.dtype,
-                        device=pred_encs.device,
-                    )
-                    sampled_target_locs = torch.empty(bs, config.sample_timesteps, 2)
+                    sampled_pred_encs, sampled_target_locs = [], []
+                    for i in range(pred_encs.shape[1]):  # Iterate over batch size
+                        indices = torch.randperm(pred_encs.shape[0])[: config.sample_timesteps]
+                        sampled_pred_encs.append(pred_encs[indices, i, :])
+                        sampled_target_locs.append(target[i, indices])
+                    pred_encs = torch.stack(sampled_pred_encs, dim=1)  # (T, B, D)
+                    target = torch.stack(sampled_target_locs, dim=0).cuda()  # (B, T, 2)
 
-                    for i in range(bs):
-                        indices = torch.randperm(n_steps)[: config.sample_timesteps]
-                        sampled_pred_encs[:, i, :] = pred_encs[indices, i, :]
-                        sampled_target_locs[i, :] = target[i, indices]
-
-                    pred_encs = sampled_pred_encs
-                    target = sampled_target_locs.cuda()
-
-                pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
+                # Step 4: Predict locations using the Prober
+                pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)  # (B, T, 2)
                 losses = location_losses(pred_locs, target)
                 per_probe_loss = losses.mean()
 
                 if step % 100 == 0:
                     print(f"Normalized pred locations loss: {per_probe_loss.item()}")
 
-                losses_list.append(per_probe_loss)
+                # Step 5: Backpropagation and optimization
                 optimizer_pred_prober.zero_grad()
-                loss = sum(losses_list)
-                loss.backward()
+                per_probe_loss.backward()
                 optimizer_pred_prober.step()
-
-                lr = scheduler.adjust_learning_rate(step)
+                scheduler.adjust_learning_rate(step)
 
                 step += 1
 
@@ -182,51 +143,32 @@ class ProbingEvaluator:
         return prober
 
     @torch.no_grad()
-    def evaluate_all(
-        self,
-        prober,
-    ):
+    def evaluate_all(self, prober):
         """
-        Evaluates on all the different validation datasets
+        Evaluates on all the different validation datasets.
         """
         avg_losses = {}
-
         for prefix, val_ds in self.val_ds.items():
-            avg_losses[prefix] = self.evaluate_pred_prober(
-                prober=prober,
-                val_ds=val_ds,
-                prefix=prefix,
-            )
-
+            avg_losses[prefix] = self.evaluate_pred_prober(prober=prober, val_ds=val_ds)
         return avg_losses
 
     @torch.no_grad()
-    def evaluate_pred_prober(
-        self,
-        prober,
-        val_ds,
-        prefix="",
-    ):
-        quick_debug = self.quick_debug
-        config = self.config
-
+    def evaluate_pred_prober(self, prober, val_ds):
+        """
+        Evaluate the Prober on a single validation dataset.
+        """
         model = self.model
         probing_losses = []
         prober.eval()
 
-        for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
-            ################################################################################
-            # TODO: Forward pass through your model
-            init_states = batch.states[:, 0:1]  # BS, 1, C, H, W
-            pred_encs = model(states=init_states, actions=batch.actions)
-            pred_encs = pred_encs.transpose(0, 1)
+        for batch in tqdm(val_ds, desc="Eval probe pred"):
+            pred_encs = model(states=batch.states, actions=batch.actions)  # (B, T, D)
+            pred_encs = pred_encs.transpose(0, 1)  # Transpose to (T, B, D)
 
             target = getattr(batch, "locations").cuda()
             target = self.normalizer.normalize_location(target)
 
-            pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
-            print("pred_locs shape:", pred_locs.shape)
-            print("target shape:", target.shape)
+            pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)  # (B, T, 2)
             losses = location_losses(pred_locs, target)
             probing_losses.append(losses.cpu())
 
