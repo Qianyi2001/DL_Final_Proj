@@ -5,7 +5,6 @@ from JEPA import Encoder, Predictor, vicreg_loss
 from dataset import create_wall_dataloader
 from tqdm import tqdm  # 引入 tqdm
 
-
 def train_jepa(encoder_theta, encoder_psi, predictor, dataloader,
                optimizer, device='cuda', epochs=1):
     encoder_theta.train()
