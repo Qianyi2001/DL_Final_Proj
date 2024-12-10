@@ -158,7 +158,9 @@ class ProbingEvaluator:
                     pred_encs = sampled_pred_encs
                     target = sampled_target_locs.cuda()
 
-                pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
+                pred_locs = torch.stack([prober(x) for x in pred_encs], dim=0)
+                pred_locs = pred_locs.transpose(0, 1)
+
                 print("pred_locs shape:", pred_locs.shape)
                 print("target shape:", target.shape)
                 losses = location_losses(pred_locs, target)
@@ -226,15 +228,19 @@ class ProbingEvaluator:
             # Make sure pred_encs has shape (T, BS, D) at this point
             ################################################################################
 
-            with torch.no_grad():
-                s0 = self.model.encoder_theta(init_states.squeeze(1))  # (B, D)
+            s0 = self.model.encoder_theta(init_states.squeeze(1))  # (B, D)
             s0 = s0.unsqueeze(0)  # (1, B, D)
             pred_encs = torch.cat([s0, pred_encs], dim=0)  # (T, B, D)
 
             target = getattr(batch, "locations").cuda()
             target = self.normalizer.normalize_location(target)
 
-            pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
+            # 对每个时间步的编码使用prober
+            pred_locs = torch.stack([prober(x) for x in pred_encs], dim=0)
+
+            # 确保pred_locs的形状与target匹配
+            pred_locs = pred_locs.transpose(0, 1)  # 转换为 (BS, T, 2)
+            
             losses = location_losses(pred_locs, target)
             probing_losses.append(losses.cpu())
 
