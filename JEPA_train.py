@@ -76,4 +76,4 @@ if __name__ == "__main__":
         'encoder_theta': encoder_theta.state_dict(),
         'encoder_psi': encoder_psi.state_dict(),
         'predictor': predictor.state_dict()
-    }, 'model_weights.pth')
+    }, 'home/qx690/model_weights.pth')

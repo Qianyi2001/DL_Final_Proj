@@ -50,7 +50,7 @@ def load_model():
 
     # 从文件加载参数
     # 确保 'model_weights.pth' 是您训练好后保存在同目录的权重文件
-    checkpoint = torch.load('model_weights.pth', map_location=device)
+    checkpoint = torch.load('/home/qx690/model_weights.pth', map_location=device)
     encoder_theta.load_state_dict(checkpoint['encoder_theta'])
     predictor.load_state_dict(checkpoint['predictor'])
 
