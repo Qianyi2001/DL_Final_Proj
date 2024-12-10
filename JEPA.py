@@ -39,7 +39,7 @@ class Predictor(nn.Module):
         return self.fc(x)
 
 
-def vicreg_loss(x, y, sim_weight=25.0, var_weight=25.0, cov_weight=1.0, eps=1e-4):
+def vicreg_loss(x, y, sim_weight=50.0, var_weight=10.0, cov_weight=0.5, eps=1e-4):
     """
     x, y: (B, D)
     使用VICReg损失来防止表示坍缩

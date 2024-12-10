@@ -11,55 +11,54 @@ def train_jepa(encoder_theta, encoder_psi, predictor, dataloader, optimizer, dev
     encoder_psi.train()
     predictor.train()
 
+    ema_decay = 0.99
     for epoch in range(epochs):
         for i, batch in enumerate(dataloader):
-            states = batch.states  # (N, T, 2, H, W)
-            actions = batch.actions # (N, T-1, 2)
-            states = states.to(device)
-            actions = actions.to(device)
+            states = batch.states.to(device)
+            actions = batch.actions.to(device)
+            if i % 100 == 0:  # 每100个batch打印一次
+                print("Actions mean:", actions.mean().item(), "std:", actions.std().item())
 
             N, T, C, H, W = states.shape
 
-            s0 = encoder_theta(states[:,0])
-
+            s0 = encoder_theta(states[:, 0])
+            target_reps = []
             with torch.no_grad():
-                target_reps = []
                 for t in range(T):
-                    target_reps.append(encoder_psi(states[:,t]))
-                target_reps = torch.stack(target_reps, dim=1) # (N, T, feature_dim)
+                    tr = encoder_psi(states[:, t])
+                    tr = torch.nn.functional.layer_norm(tr, [tr.size(-1)])  # LayerNorm处理
+                    target_reps.append(tr)
+                target_reps = torch.stack(target_reps, dim=1)
 
             pred_s = [s0]
             for t in range(1, T):
-                u_t_1 = actions[:, t-1]
+                u_t_1 = actions[:, t - 1]
                 prev_s = pred_s[-1]
                 next_s_pred = predictor(prev_s, u_t_1)
                 pred_s.append(next_s_pred)
-            pred_s = torch.stack(pred_s, dim=1) # (N, T, feature_dim)
+            pred_s = torch.stack(pred_s, dim=1)
 
-            # Compute VICReg loss
             loss = vicreg_loss(
-                pred_s[:,1:].reshape(-1, pred_s.size(-1)),
-                target_reps[:,1:].reshape(-1, target_reps.size(-1))
+                pred_s[:, 1:].reshape(-1, pred_s.size(-1)),
+                target_reps[:, 1:].reshape(-1, target_reps.size(-1)),
+                sim_weight=50.0,
+                var_weight=10.0,
+                cov_weight=0.5
             )
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
+            # 使用EMA更新encoder_psi
+            with torch.no_grad():
+                for p_theta, p_psi in zip(encoder_theta.parameters(), encoder_psi.parameters()):
+                    p_psi.data = ema_decay * p_psi.data + (1 - ema_decay) * p_theta.data
+
             if i % 100 == 0:
                 print(f"Epoch {epoch}, step {i}, loss: {loss.item()}")
-
-                # 检查pred_s和target_reps的均值方差
-                pred_mean = pred_s.mean().item()
-                pred_std = pred_s.std().item()
-                target_mean = target_reps.mean().item()
-                target_std = target_reps.std().item()
-                print(f"pred_s mean: {pred_mean:.4f}, std: {pred_std:.4f}")
-                print(f"target_reps mean: {target_mean:.4f}, std: {target_std:.4f}")
-
-        print(f"Epoch {epoch} complete. Loss: {loss.item()}")
-
-
+                print(f"pred_s mean: {pred_s.mean().item():.4f}, std: {pred_s.std().item():.4f}")
+                print(f"target_reps mean: {target_reps.mean().item():.4f}, std: {target_reps.std().item():.4f}")
 
 if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -74,7 +73,7 @@ if __name__ == "__main__":
 
     optimizer = torch.optim.Adam(list(encoder_theta.parameters()) +
                                  list(predictor.parameters()),
-                                 lr=1e-4)
+                                 lr=1e-3)
 
     # 示例：用户应在外部通过 create_wall_dataloader 创建 dataloader
     dataloader = create_wall_dataloader(
