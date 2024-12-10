@@ -116,10 +116,13 @@ class ProbingEvaluator:
                 pred_encs = model(states=init_states, actions=batch.actions)
                 pred_encs = pred_encs.transpose(0, 1)  # # BS, T, D --> T, BS, D
 
+                with torch.no_grad():
+                    s0 = model.encoder_theta(init_states.squeeze(1))  # s0: (B, D)
+                s0 = s0.unsqueeze(0)  # (1, B, D)
+                pred_encs = torch.cat([s0, pred_encs], dim=0)
+
                 # Make sure pred_encs has shape (T, BS, D) at this point
                 ################################################################################
-
-                pred_encs = pred_encs.detach()
 
                 n_steps = pred_encs.shape[0]
                 bs = pred_encs.shape[1]
@@ -219,6 +222,11 @@ class ProbingEvaluator:
 
             # Make sure pred_encs has shape (T, BS, D) at this point
             ################################################################################
+
+            with torch.no_grad():
+                s0 = self.model.encoder_theta(init_states.squeeze(1))  # (B, D)
+            s0 = s0.unsqueeze(0)  # (1, B, D)
+            pred_encs = torch.cat([s0, pred_encs], dim=0)  # (T, B, D)
 
             target = getattr(batch, "locations").cuda()
             target = self.normalizer.normalize_location(target)
