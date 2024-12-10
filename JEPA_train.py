@@ -74,7 +74,7 @@ if __name__ == "__main__":
         data_path="/scratch/DL24FA/train",
         probing=False,
         device=device,
-        batch_size=32,
+        batch_size=128,
         train=True,
     )
 
